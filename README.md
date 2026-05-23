@@ -104,6 +104,96 @@ Or just `unset` the option inside your R session and call
 
 ---
 
+## Under the hood: the `.Rprofile` customisations
+
+To make "your existing R scripts just work against a local mirror"
+land cleanly, the container's `.Rprofile` does two non-trivial things
+once `move2` attaches. Worth knowing about, both so the behaviour
+isn't surprising and so you can opt out cleanly.
+
+### 1. The `move2_movebank_api_url` option is re-set after `move2` attaches
+
+`.Rprofile` sets `options(move2_movebank_api_url = ...)` at session
+start. But `move2`'s `.onLoad` hook **unconditionally resets that
+option** to its built-in default (the live Movebank URL) when the
+package loads — clobbering whatever we set. To win the race,
+`.Rprofile` registers a hook on `packageEvent("move2", "attach")`
+that re-sets the option after `.onLoad` and `.onAttach` have both
+fired.
+
+Symptom of this not working: `getOption("move2_movebank_api_url")`
+shows the live URL after `library(move2)`, even though the container
+is supposed to point at your local mirror.
+
+### 2. `move2:::movebank_handle()` is rebound to skip the keyring lookup
+
+`move2`'s `movebank_handle()` defaults to fetching credentials from
+the system `keyring` R package, which isn't (and shouldn't be) in
+this image. Against a local mirror that ignores credentials, that
+lookup is pointless — but `movebank_download_study()` and friends
+call `movebank_handle()` internally and prompt for keyring setup
+when nothing is there.
+
+So `.Rprofile` rebinds `movebank_handle` in `move2`'s namespace to
+default `username` and `password` to `"ignored"` when none are
+supplied, then forwards to the original implementation. The mirror
+accepts these.
+
+Symptom of this not working: `movebank_download_study(...)` prompts
+"the package keyring is required to create a movebank handle —
+would you like to install it?" instead of just running.
+
+### The local-mirror guard
+
+**Both customisations only apply when the configured URL points at a
+local mirror** — specifically, the URL must start with
+`http://host.docker.internal`, `http://localhost`, or
+`http://127.0.0.1`.
+
+If you re-point the container at the live API:
+
+```bash
+docker run -p 8787:8787 -e PASSWORD=movebank \
+    -e MOVEBANK_MIRROR_API_URL=https://www.movebank.org/movebank \
+    mcb77/movebank-rocker:latest
+```
+
+…the guard skips both rebindings. `move2` runs with its stock
+behaviour: real keyring lookup, real `.onLoad` URL default. The
+image remains a perfectly normal pinned R environment against the
+real Movebank with real credentials — useful for validating a
+local-mirror-derived analysis against the upstream as a sanity
+check.
+
+### Why monkey-patch?
+
+The two customisations rebind functions in `move2`'s namespace
+rather than asking `move2` to ship a no-keyring/no-default code
+path. Same pattern as
+[`url_shim.R`](https://github.com/mcb77/movebank-mirror-api/blob/master/compatibility/move-r/url_shim.R)
+for `move` v1, which works around the hardcoded live URL in
+`move::getMovebank()`.
+
+Both are pragmatic: the upstream packages were designed for the
+single-server, real-credentials use case, and the local-mirror
+scenario isn't a first-class citizen yet. The patches are small,
+localised, and guarded by the local-URL check — the upstreams'
+behaviour for their main audience is unchanged.
+
+Trade-off: pinning to a specific `move2` version matters. If a
+future `move2` renames `movebank_handle` or restructures its auth
+dispatch, the rebinding silently no-ops (or errors confusingly).
+The smoke-test in
+[`PUBLISHING.md` §2.4](PUBLISHING.md) catches that — both the URL
+option path and the `movebank_handle()` path are exercised on every
+build, and a failure tells you the rebinding stopped working before
+the image gets published.
+
+The implementation lives in [`/.Rprofile`](.Rprofile) — ~30 lines,
+worth a skim before extending the image.
+
+---
+
 ## Verifying the install
 
 Run the regression-test suite against a running `movebank-mirror-api`:
