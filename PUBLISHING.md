@@ -148,7 +148,45 @@ system library that `rocker/geospatial` doesn't pre-install. Fix by
 adding the system dep with `apt-get install` ahead of the R install
 step.
 
-### 2.4 Run the regression suite
+### 2.4 Smoke-test the `.Rprofile` override
+
+The image builds. The regression passes. Easy to believe you're done.
+But the **interactive RStudio path** uses a completely different
+mechanism than the regression scripts to talk to the mirror — it
+relies on `.Rprofile` setting `move2_movebank_api_url`, while
+`verify.R` sets that option itself. A `.Rprofile` regression won't
+surface in the regression suite.
+
+Run this quick check as the `rstudio` user (which is what RStudio
+Server runs as) before the more expensive regression below:
+
+```bash
+docker run --rm --user rstudio -w /home/rstudio movebank-rocker:dev \
+    R --quiet -e '
+        suppressPackageStartupMessages(library(move2))
+        stopifnot(getOption("move2_movebank_api_url") ==
+                  "http://host.docker.internal:8080/movebank/service/direct-read")
+        cat("OK\n")'
+```
+
+`OK` is success. A `stopifnot` failure means `.Rprofile` is being
+silently bypassed. The two most common causes:
+
+- The option was set but something — typically `move2`'s `.onLoad`
+  hook — overwrote it after `.Rprofile` ran. Our `.Rprofile` re-sets
+  the option via `setHook(packageEvent("move2", "attach"), ...)`
+  specifically to defeat this.
+- The default user changed in the base image so the file is being
+  read from a different `$HOME`. If `docker run` defaults to root,
+  R looks at `/root/.Rprofile` (doesn't exist) and ours is skipped.
+
+The `--user rstudio` flag is load-bearing — without it `docker run`
+starts R as root, and root has no `.Rprofile` in `/home/rstudio/`.
+The check then tests an environment (root home) that doesn't match
+the real one (`rstudio` home, which is what RStudio Server uses).
+Always pass `--user rstudio` here.
+
+### 2.5 Run the regression suite
 
 Build is "did it compile"; regression is "does it actually work
 against a real mirror." Start `movebank-mirror-api` on the host
@@ -166,7 +204,7 @@ docker run --rm \
 Expect `4/4 checks passed`. Repeat with `/work/move2-r/verify.R`.
 **If either fails, do not tag** — the regression suite is the gate.
 
-### 2.5 Commit and tag
+### 2.6 Commit and tag
 
 ```bash
 git add Dockerfile .Rprofile           # whatever changed
@@ -179,7 +217,7 @@ Tag scheme: `vMAJOR.MINOR.PATCH`. The Actions workflow triggers on any
 tag matching `v*` and publishes to Docker Hub as
 `mcb77/movebank-rocker:v0.2.0` *and* `mcb77/movebank-rocker:latest`.
 
-### 2.6 Watch the workflow
+### 2.7 Watch the workflow
 
 <https://github.com/mcb77/movebank-rocker/actions>
 
@@ -208,7 +246,7 @@ If it fails at *push*, check Docker Hub's status page. Docker Hub
 outages are rare but real; rerun the workflow once Docker Hub is
 healthy.
 
-### 2.7 Verify on Docker Hub
+### 2.8 Verify on Docker Hub
 
 Once green:
 
@@ -224,7 +262,7 @@ For the strictest "did it actually work" check, pull on a *different*
 machine from the one that built it and rerun the regression suite.
 That catches "I had the package cached locally" mistakes.
 
-### 2.8 (Optional) create a GitHub Release
+### 2.9 (Optional) create a GitHub Release
 
 The Docker Hub publish *is* the release, but a GitHub Release entry
 gives you a human-readable changelog and a permanent landing page:
@@ -269,8 +307,9 @@ the tag-driven Actions flow (Part 2) for the discipline.
 ### 2.alt.1 Prerequisites
 
 - Docker Hub account + access token from §1.1–§1.3.
-- A local image built and tested. Run the regression suite from §2.4
-  before pushing — don't publish bits you haven't verified.
+- A local image built and tested. Run the `.Rprofile` smoke-test
+  from §2.4 and the regression suite from §2.5 before pushing —
+  don't publish bits you haven't verified on both paths.
 
 ### 2.alt.2 Authenticate locally
 
@@ -304,7 +343,7 @@ already has.
 
 ### 2.alt.4 Validate the published image
 
-Same as §2.7 but force a fresh pull first to make sure you're testing
+Same as §2.8 but force a fresh pull first to make sure you're testing
 what's actually on Docker Hub, not what's still in your local cache:
 
 ```bash
@@ -460,8 +499,9 @@ git tag separately"; everything else is the same.
 
 ```
 [ ] decided what's changing: package bump / base bump / Dockerfile change
-[ ] Dockerfile edited (if needed) and committed locally
+[ ] Dockerfile / .Rprofile edited (if needed) and committed locally
 [ ] docker build -t movebank-rocker:dev . — success
+[ ] .Rprofile smoke-test passes (§2.4: --user rstudio + library(move2) + getOption)
 [ ] regression suite passes:
       [ ] move-r/verify.R    → 4/4
       [ ] move2-r/verify.R   → 4/4
