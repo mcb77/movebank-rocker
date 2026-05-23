@@ -249,6 +249,111 @@ The version-specific R package versions can be cribbed from
 
 ---
 
+## Part 2.alt. Manual publishing (no GitHub Actions)
+
+Use this path when:
+
+- **Cutting v0.1.0.** You've validated the image locally; uploading
+  the bits you tested is more trustworthy than asking a fresh CI
+  machine to rebuild and hoping the output is identical. Skip Actions
+  for the first release.
+- **An urgent patch.** Docker Hub outage, Actions failing, you need
+  the image up *now*. Manual is the fast path.
+- **You want to publish a specific local build** — e.g. from a beefy
+  workstation whose layers are already cached, instead of waiting for
+  a cold CI build.
+
+Once `v0.1.0` is up and you trust the Actions setup end-to-end, prefer
+the tag-driven Actions flow (Part 2) for the discipline.
+
+### 2.alt.1 Prerequisites
+
+- Docker Hub account + access token from §1.1–§1.3.
+- A local image built and tested. Run the regression suite from §2.4
+  before pushing — don't publish bits you haven't verified.
+
+### 2.alt.2 Authenticate locally
+
+```bash
+docker login
+# username: <docker-hub-username>
+# password: <paste the access token from §1.3>
+```
+
+Credentials get cached in `~/.docker/config.json`. One-time per
+machine.
+
+### 2.alt.3 Tag and push
+
+```bash
+# Three tag pointers to the same image SHA — no rebuild, just labels.
+docker tag movebank-rocker:dev mcb77/movebank-rocker:v<X.Y.Z>
+docker tag movebank-rocker:dev mcb77/movebank-rocker:latest
+
+# Push the version tag first (uploads the actual ~7 GB).
+docker push mcb77/movebank-rocker:v<X.Y.Z>
+
+# Push :latest second — sub-second, same layers, just a new tag.
+docker push mcb77/movebank-rocker:latest
+```
+
+Upload time on the first push: ~10–15 min on a typical home
+connection. Subsequent pushes that change only the package-install
+layer move just that one ~500 MB layer; the base layers Docker Hub
+already has.
+
+### 2.alt.4 Validate the published image
+
+Same as §2.7 but force a fresh pull first to make sure you're testing
+what's actually on Docker Hub, not what's still in your local cache:
+
+```bash
+docker rmi mcb77/movebank-rocker:v<X.Y.Z> \
+           mcb77/movebank-rocker:latest \
+           movebank-rocker:dev
+docker pull mcb77/movebank-rocker:v<X.Y.Z>
+docker run --rm \
+    --add-host=host.docker.internal:host-gateway \
+    -e MOVEBANK_MIRROR_API_URL=http://host.docker.internal:8080/movebank \
+    -v ~/devel/firetail/movebank-mirror-api/compatibility:/work:ro \
+    -w /work/move-r \
+    mcb77/movebank-rocker:v<X.Y.Z> \
+    Rscript verify.R
+```
+
+`4/4 checks passed` → published artifact is good. The whole point of
+the `docker rmi` first is to catch "I had it cached locally, the
+upload was actually broken" type mistakes.
+
+### 2.alt.5 Don't forget the git tag
+
+The manual push doesn't touch git. After verifying the image is good,
+also tag the source so future-you can find the commit that produced
+each published version:
+
+```bash
+git tag -a v<X.Y.Z> -m "v<X.Y.Z>"
+git push origin v<X.Y.Z>
+```
+
+**Skip this step and the published image becomes un-rebuildable** —
+no commit-history record of which source produced it. The Actions
+flow couples push to tag automatically; on the manual path you have
+to hold yourself to the same discipline.
+
+### When manual goes wrong: just rerun
+
+If `docker push` dies mid-upload (flaky connection, Docker Hub
+hiccup), rerun the same `docker push` command. Docker resumes from
+the layer that wasn't fully uploaded — already-uploaded layers are
+skipped. No special recovery needed.
+
+If push fails with a permissions error, you're either not logged in
+(`docker login` again) or the token in §1.3 didn't have write scope
+(regenerate it).
+
+---
+
 ## Part 3. Troubleshooting
 
 ### `401 Unauthorized` from Docker Hub during push
@@ -348,19 +453,34 @@ Options:
 
 ## Part 4. Per-release checklist
 
-Copy this when cutting a release:
+The checklist assumes the **Actions-driven** flow (Part 2). For the
+manual path (Part 2.alt — recommended for v0.1.0), replace the
+"git tag → workflow green" step with "docker tag + docker push +
+git tag separately"; everything else is the same.
 
 ```
-[ ] decided what's changing: CRAN bump / base bump / Dockerfile change
+[ ] decided what's changing: package bump / base bump / Dockerfile change
 [ ] Dockerfile edited (if needed) and committed locally
 [ ] docker build -t movebank-rocker:dev . — success
 [ ] regression suite passes:
       [ ] move-r/verify.R    → 4/4
       [ ] move2-r/verify.R   → 4/4
+
+  -- Actions-driven path (Part 2) --
 [ ] git tag -a v<X.Y.Z> -m '…' && git push --tags
 [ ] Actions workflow green at github.com/mcb77/movebank-rocker/actions
-[ ] docker pull mcb77/movebank-rocker:v<X.Y.Z> on a clean machine
-[ ] regression suite passes against pulled image on clean machine
+
+  -- OR: manual path (Part 2.alt) --
+[ ] docker login (if not cached)
+[ ] docker tag movebank-rocker:dev mcb77/movebank-rocker:v<X.Y.Z>
+[ ] docker tag movebank-rocker:dev mcb77/movebank-rocker:latest
+[ ] docker push mcb77/movebank-rocker:v<X.Y.Z>     (~10–15 min)
+[ ] docker push mcb77/movebank-rocker:latest       (sub-second)
+[ ] git tag -a v<X.Y.Z> -m '…' && git push --tags  (don't forget!)
+
+  -- both paths from here --
+[ ] docker rmi + docker pull mcb77/movebank-rocker:v<X.Y.Z> (force fresh)
+[ ] regression suite passes against pulled image
 [ ] (optional) gh release create v<X.Y.Z> --title '…' --notes '…'
 [ ] (optional) update Docker Hub long description if README changed
 ```
