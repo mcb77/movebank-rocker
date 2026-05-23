@@ -18,6 +18,31 @@ local({
     # and wins.
     setHook(packageEvent("move2", "attach"), function(...) {
         options(move2_movebank_api_url = url)
+
+        # If the URL points at a local mirror, move2's credential lookup
+        # is pointless — the mirror ignores credentials. Inject dummy
+        # values into movebank_handle() so movebank_download_study() and
+        # friends don't prompt for keyring setup. Only applied for
+        # local-mirror URLs; live-API URLs still go through move2's
+        # normal keyring-based auth.
+        is_local <- grepl(
+            "^http://(host\\.docker\\.internal|localhost|127\\.0\\.0\\.1)",
+            url
+        )
+        if (is_local) {
+            ns <- asNamespace("move2")
+            original <- ns$movebank_handle
+            wrapped <- function(username = NULL, password = NULL, ...) {
+                if (is.null(username) && is.null(password)) {
+                    username <- "ignored"
+                    password <- "ignored"
+                }
+                original(username = username, password = password, ...)
+            }
+            unlockBinding("movebank_handle", ns)
+            assign("movebank_handle", wrapped, envir = ns)
+            lockBinding("movebank_handle", ns)
+        }
     })
 
     # `move` v1 hardcodes the live URL inside getMovebank(); the URL

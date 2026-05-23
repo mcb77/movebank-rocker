@@ -166,11 +166,15 @@ docker run --rm --user rstudio -w /home/rstudio movebank-rocker:dev \
         suppressPackageStartupMessages(library(move2))
         stopifnot(getOption("move2_movebank_api_url") ==
                   "http://host.docker.internal:8080/movebank/service/direct-read")
+        # also exercise the credential-bypass path: against a local mirror,
+        # movebank_handle() with no args must succeed (no keyring lookup).
+        h <- move2:::movebank_handle()
+        stopifnot(inherits(h, "curl_handle"))
         cat("OK\n")'
 ```
 
 `OK` is success. A `stopifnot` failure means `.Rprofile` is being
-silently bypassed. The two most common causes:
+silently bypassed. The three most common causes:
 
 - The option was set but something — typically `move2`'s `.onLoad`
   hook — overwrote it after `.Rprofile` ran. Our `.Rprofile` re-sets
@@ -179,6 +183,12 @@ silently bypassed. The two most common causes:
 - The default user changed in the base image so the file is being
   read from a different `$HOME`. If `docker run` defaults to root,
   R looks at `/root/.Rprofile` (doesn't exist) and ours is skipped.
+- The `movebank_handle()` check fails with "package keyring is
+  required". This means the credential-bypass guard in `.Rprofile`
+  (the `is_local` block in the `packageEvent("move2", "attach")`
+  hook) didn't apply — usually because the URL didn't match the
+  `localhost / 127.0.0.1 / host.docker.internal` regex. Either fix
+  the URL or extend the regex.
 
 The `--user rstudio` flag is load-bearing — without it `docker run`
 starts R as root, and root has no `.Rprofile` in `/home/rstudio/`.
