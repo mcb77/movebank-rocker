@@ -10,13 +10,15 @@ environment is ready to use.
 
 ```bash
 docker run -p 8787:8787 \
-    --add-host=host.docker.internal:host-gateway \
     -e PASSWORD=movebank \
     mcb77/movebank-rocker:latest
 ```
 
 Open <http://localhost:8787> → log in as `rstudio` / `movebank` → you
 have RStudio Server with everything pre-installed.
+
+(The `--add-host` / networking flags come in below, once you're pointing
+the container at a local `movebank-mirror-api`.)
 
 ---
 
@@ -54,36 +56,59 @@ This image's reason to exist: paired with
 [`movebank-mirror-api`](https://github.com/mcb77/movebank-mirror-api),
 your R workflows run offline against a local mirror of Movebank.
 
-```bash
-# On the host:
-movebank-mirror-api -d /var/lib/movebank-mirror &
+How the container reaches the host's mirror server differs by platform. Start
+the server on the host first (adjust the `-v` path to your checkout):
 
-# In another shell (adjust the -v path to your local checkout of
-# movebank-mirror-api):
-docker run -p 8787:8787 \
-    --add-host=host.docker.internal:host-gateway \
+```bash
+movebank-mirror-api -d /var/lib/movebank-mirror &
+```
+
+**Linux — host networking (server stays loopback-only, which is safer):**
+
+```bash
+docker run --network=host \
     -e PASSWORD=movebank \
-    -v ~/devel/movebank-mirror-api/compatibility:/work:ro \
+    -e MOVEBANK_MIRROR_API_URL=http://localhost:8080/movebank \
+    -v ~/devel/movebank-mirror-api/compatibility/compat:/work:ro \
     mcb77/movebank-rocker:latest
 ```
 
-The container's pre-baked `.Rprofile` already sets
-`options(move2_movebank_api_url = "http://host.docker.internal:8080/...")`,
-so `move2::movebank_download_study(...)` reads from the local mirror
-without changes to your scripts.
+**macOS / Windows (Docker Desktop) — bridge; `host.docker.internal` reaches the host:**
 
-For `move` v1 (which hardcodes the live URL inside the package), source
-the URL shim from your mounted `/work` directory:
+```bash
+docker run -p 8787:8787 \
+    --add-host=host.docker.internal:host-gateway \
+    -e PASSWORD=movebank \
+    -v ~/devel/movebank-mirror-api/compatibility/compat:/work:ro \
+    mcb77/movebank-rocker:latest
+```
+
+> On **Linux**, the bridge variant only works if the server is bound to all
+> interfaces (`movebank-mirror-api -d … -b 0.0.0.0`) — the default `127.0.0.1`
+> bind refuses the container's gateway-IP requests. That exposes the
+> unauthenticated server on your LAN, so prefer host networking on Linux.
+
+The container's pre-baked `.Rprofile` sets `move2_movebank_api_url` from
+`MOVEBANK_MIRROR_API_URL` (default `http://host.docker.internal:8080/...`), so
+`move2::movebank_download_study(...)` reads from the local mirror without changes
+to your scripts.
+
+For `move` v1 (which hardcodes the live URL inside the package), source the URL
+shim from your mounted `/work` directory and point it at the same URL the
+container uses:
 
 ```r
 source("/work/move-r/url_shim.R")
 login <- movebankLogin(username = "ignored", password = "ignored")
-override_url(login, "http://host.docker.internal:8080/movebank")
+# same URL the container was told about (localhost under host networking,
+# host.docker.internal under the Docker Desktop bridge):
+api <- Sys.getenv("MOVEBANK_MIRROR_API_URL", unset = "http://host.docker.internal:8080/movebank")
+override_url(login, api)
 # now move::getMovebank*(...) reads from the local mirror
 ```
 
 The shim, plus a `verify.R` regression-test script, ship in
-`movebank-mirror-api/compatibility/move-r/`.
+`movebank-mirror-api/compatibility/compat/move-r/`.
 
 ---
 
@@ -170,7 +195,7 @@ check.
 The two customisations rebind functions in `move2`'s namespace
 rather than asking `move2` to ship a no-keyring/no-default code
 path. Same pattern as
-[`url_shim.R`](https://github.com/mcb77/movebank-mirror-api/blob/master/compatibility/move-r/url_shim.R)
+[`url_shim.R`](https://github.com/mcb77/movebank-mirror-api/blob/master/compatibility/compat/move-r/url_shim.R)
 for `move` v1, which works around the hardcoded live URL in
 `move::getMovebank()`.
 
@@ -196,19 +221,32 @@ worth a skim before extending the image.
 
 ## Verifying the install
 
-Run the regression-test suite against a running `movebank-mirror-api`:
+Run the regression-test suite against a running `movebank-mirror-api`.
+
+**Linux (host networking):**
+
+```bash
+docker run --rm --network=host \
+    -e MOVEBANK_MIRROR_API_URL=http://localhost:8080/movebank \
+    -v ~/devel/movebank-mirror-api/compatibility/compat:/work:ro \
+    mcb77/movebank-rocker:latest \
+    Rscript /work/move-r/verify.R
+```
+
+**macOS / Windows (Docker Desktop):**
 
 ```bash
 docker run --rm \
     --add-host=host.docker.internal:host-gateway \
     -e MOVEBANK_MIRROR_API_URL=http://host.docker.internal:8080/movebank \
-    -v ~/devel/movebank-mirror-api/compatibility:/work:ro \
+    -v ~/devel/movebank-mirror-api/compatibility/compat:/work:ro \
     mcb77/movebank-rocker:latest \
     Rscript /work/move-r/verify.R
 ```
 
 Should print `4/4 checks passed`. Repeat against
-`/work/move2-r/verify.R` for the v2 client.
+`/work/move2-r/verify.R` for the v2 client. (On Linux with the bridge variant,
+start the server with `-b 0.0.0.0` — see the note above.)
 
 ---
 
