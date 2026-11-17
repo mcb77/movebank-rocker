@@ -450,7 +450,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ### `moveVis` can't be resolved by `pak`
 
-`moveVis` was archived from CRAN in late 2024. `pak` won't find it
+`moveVis` was archived from CRAN on 2023-07-11. `pak` won't find it
 through any CRAN-flavoured source (including P3M binaries). The
 Dockerfile pins it to its GitHub source as `16EAGLE/moveVis`. If a
 future `pak` resolution starts failing on this line, check:
