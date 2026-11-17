@@ -246,9 +246,14 @@ git tag -a v0.2.0 -m "v0.2.0 — R 4.5.0 base"
 git push origin master --tags
 ```
 
-Tag scheme: `vMAJOR.MINOR.PATCH`. The Actions workflow triggers on any
-tag matching `v*` and publishes to Docker Hub as
-`mcb77/movebank-rocker:v0.2.0` *and* `mcb77/movebank-rocker:latest`.
+Tag scheme: `vMAJOR.MINOR.PATCH`. The Actions workflow publishes to
+Docker Hub as `mcb77/movebank-rocker:v0.2.0` *and*
+`mcb77/movebank-rocker:latest`.
+
+> **Current state (2026-11-17):** the tag trigger is switched off, because
+> the secrets from §1.4 are not set; releases go out by hand (Part 2.alt).
+> To use this flow, set the secrets and add `push: tags: ['v*']` back to
+> `.github/workflows/build.yml`.
 
 ### 2.7 Watch the workflow
 

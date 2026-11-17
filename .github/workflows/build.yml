@@ -1,9 +1,12 @@
 name: build-and-push
 
+# Manual trigger only. Releases are pushed by hand (PUBLISHING.md Part 2.alt)
+# until the DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets are set; then add
+#   push:
+#     tags: ['v*']
+# back to publish on every version tag.
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:        # allow manual builds for testing
+  workflow_dispatch:
 
 jobs:
   build:
