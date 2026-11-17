@@ -3,7 +3,8 @@
 A pinned R environment for working with [Movebank](https://www.movebank.org)
 data — `rocker/geospatial` plus the canonical Movebank R clients
 (`move`, `move2`) and movement-visualisation packages (`moveVis`, `sf`),
-versions pinned to a known-good matrix.
+every version pinned: base image by digest, CRAN packages by a dated
+snapshot, `moveVis` by commit. The same tag gives you the same packages.
 
 Skip the GDAL / udunits / PROJ install dance: `docker pull` and the R
 environment is ready to use.
@@ -17,8 +18,10 @@ docker run -p 8787:8787 \
 Open <http://localhost:8787> → log in as `rstudio` / `movebank` → you
 have RStudio Server with everything pre-installed.
 
-(The `--add-host` / networking flags come in below, once you're pointing
-the container at a local `movebank-mirror-api`.)
+Without further settings, `move2` and `move` talk to movebank.org as usual
+(see [Using it against the live Movebank API](#using-it-against-the-live-movebank-api)).
+The `--add-host` / networking flags come in below, once you point the
+container at a local `movebank-mirror-api`.
 
 ---
 
@@ -27,21 +30,36 @@ the container at a local `movebank-mirror-api`.)
 Base image: `rocker/geospatial:4.4.2` (R 4.4.2 + RStudio Server + the
 full geospatial stack: GDAL, PROJ, GEOS, UDUNITS).
 
-Added R packages:
+Added R packages (versions in `v0.2.0`):
 
-| Package              | What for                                                |
-|----------------------|---------------------------------------------------------|
-| `move`               | The original Movebank R client (v1 / "classic")         |
-| `move2`              | The modern Movebank R client (v2, simple-features based)|
-| `moveVis`            | Animated trajectory visualisations                      |
-| `rnaturalearth`      | Country / region polygons for base maps                 |
-| `rnaturalearthdata`  | The data tables `rnaturalearth` reads                   |
+| Package              | Version | What for                                                |
+|----------------------|---------|---------------------------------------------------------|
+| `move`               | 4.2.6   | The original Movebank R client (v1 / "classic")         |
+| `move2`              | 0.4.4   | The modern Movebank R client (v2, simple-features based)|
+| `moveVis`            | 1.0.1   | Animated trajectory visualisations                      |
+| `rnaturalearth`      | 1.0.1   | Country / region polygons for base maps                 |
+| `rnaturalearthdata`  |         | The data tables `rnaturalearth` reads                   |
 
-`ggplot2`, `sf`, `dplyr`, etc. come from the rocker/geospatial base.
+`ggplot2` 3.5.1, `sf` 1.0-19, `terra` 1.8-29, `dplyr` etc. come from the
+rocker/geospatial base.
 
-Versions are pinned indirectly via the rocker tag plus the Posit Public
-Package Manager snapshot in effect at build time. To inspect what was
-installed in a given image tag:
+### How the versions are pinned
+
+| What | Pinned by | Where |
+|---|---|---|
+| R, RStudio Server, GDAL/PROJ/GEOS | `rocker/geospatial:4.4.2` **by digest** (a tag can be rebuilt under the same name) | `FROM` in the [`Dockerfile`](Dockerfile) |
+| CRAN packages | the dated Posit Package Manager snapshot `2025-02-27` (binaries for Ubuntu noble) | `ARG CRAN_SNAPSHOT` |
+| `moveVis` (no longer on CRAN) | GitHub commit `cf88cdc` (2025-08-22) | `ARG MOVEVIS_REF` |
+
+The build checks the key versions (`ARG EXPECTED_VERSIONS`) and fails if
+they differ, so a rebuild can't drift silently. The full list of installed
+packages is in the image at `/usr/local/share/movebank-rocker-packages.csv`.
+
+Packages you install yourself inside the container come from the same
+snapshot, so they fit the rest. To cite the environment in a paper, give
+the image tag, e.g. `mcb77/movebank-rocker:v0.2.0`.
+
+To inspect what was installed in a given image tag:
 
 ```bash
 docker run --rm mcb77/movebank-rocker:<tag> \
@@ -52,7 +70,7 @@ docker run --rm mcb77/movebank-rocker:<tag> \
 
 ## Using it with `movebank-mirror-api`
 
-This image's reason to exist: paired with
+Paired with
 [`movebank-mirror-api`](https://github.com/mcb77/movebank-mirror-api),
 your R workflows run offline against a local mirror of Movebank.
 
@@ -89,9 +107,9 @@ docker run -p 8787:8787 \
 > unauthenticated server on your LAN, so prefer host networking on Linux.
 
 The container's pre-baked `.Rprofile` sets `move2_movebank_api_url` from
-`MOVEBANK_MIRROR_API_URL` (default `http://host.docker.internal:8080/...`), so
-`move2::movebank_download_study(...)` reads from the local mirror without changes
-to your scripts.
+`MOVEBANK_MIRROR_API_URL`, so `move2::movebank_download_study(...)` reads from
+the local mirror without changes to your scripts. Without that variable the
+container leaves `move2` alone and it talks to movebank.org.
 
 For `move` v1 (which hardcodes the live URL inside the package), source the URL
 shim from your mounted `/work` directory and point it at the same URL the
@@ -102,7 +120,7 @@ source("/work/move-r/url_shim.R")
 login <- movebankLogin(username = "ignored", password = "ignored")
 # same URL the container was told about (localhost under host networking,
 # host.docker.internal under the Docker Desktop bridge):
-api <- Sys.getenv("MOVEBANK_MIRROR_API_URL", unset = "http://host.docker.internal:8080/movebank")
+api <- Sys.getenv("MOVEBANK_MIRROR_API_URL")
 override_url(login, api)
 # now move::getMovebank*(...) reads from the local mirror
 ```
@@ -114,18 +132,26 @@ The shim, plus a `verify.R` regression-test script, ship in
 
 ## Using it against the live Movebank API
 
-You don't need `movebank-mirror-api`. The image is also a pinned R
-environment for working against the live Movebank API:
+You don't need `movebank-mirror-api`. Without `MOVEBANK_MIRROR_API_URL`
+the image is a plain pinned R environment, and `move2` / `move` talk to
+movebank.org with your Movebank account:
 
 ```bash
-docker run -p 8787:8787 \
-    -e PASSWORD=movebank \
-    -e MOVEBANK_MIRROR_API_URL=https://www.movebank.org/movebank \
-    mcb77/movebank-rocker:latest
+docker run -p 8787:8787 -e PASSWORD=movebank mcb77/movebank-rocker:latest
 ```
 
-Or just `unset` the option inside your R session and call
-`movebankLogin(...)` with real credentials.
+`move2` normally keeps your password in the system keyring, which a
+container doesn't have. Pass a handle instead; RStudio asks for the
+password and nothing is stored:
+
+```r
+library(move2)
+h <- movebank_handle("your-movebank-username")
+study <- movebank_download_study(2911040, handle = h)
+```
+
+With `move`: `login <- movebankLogin(username = "your-movebank-username")`
+asks for the password in the console (what you type is visible there).
 
 ---
 

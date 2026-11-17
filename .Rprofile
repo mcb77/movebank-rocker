@@ -1,10 +1,11 @@
 # Loaded automatically at the start of every R session in the container.
-# Override at run time with `-e MOVEBANK_MIRROR_API_URL=...` on docker run,
-# or by mounting a different .Rprofile over this one.
+# Without MOVEBANK_MIRROR_API_URL nothing is changed: move2 talks to
+# movebank.org as usual. With `-e MOVEBANK_MIRROR_API_URL=...` on docker run,
+# move2 is pointed at that server (a local movebank-mirror-api).
 local({
-    api <- Sys.getenv("MOVEBANK_MIRROR_API_URL",
-                      unset = "http://host.docker.internal:8080/movebank")
-    url <- paste0(api, "/service/direct-read")
+    api <- Sys.getenv("MOVEBANK_MIRROR_API_URL", unset = "")
+    if (!nzchar(api)) return(invisible())
+    url <- paste0(sub("/+$", "", api), "/service/direct-read")
 
     # Set the option now, in case move2 isn't loaded yet — and the .Rprofile
     # path is the obvious one to inspect with getOption(...) before any

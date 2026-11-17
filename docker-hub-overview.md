@@ -6,12 +6,14 @@ ready to use.
 
 ## Quick start
 
-    docker run -p 8787:8787 \
-        --add-host=host.docker.internal:host-gateway \
-        -e PASSWORD=movebank \
-        mcb77/movebank-rocker:latest
+    docker run -p 8787:8787 -e PASSWORD=movebank mcb77/movebank-rocker:latest
 
 Open <http://localhost:8787> and log in as `rstudio` / `movebank`.
+`move2` and `move` talk to movebank.org; set `MOVEBANK_MIRROR_API_URL`
+to use a local mirror instead (see the GitHub README).
+
+Every version is pinned (base image by digest, CRAN by a dated snapshot,
+`moveVis` by commit): the same tag gives you the same packages.
 
 ## What's in it
 

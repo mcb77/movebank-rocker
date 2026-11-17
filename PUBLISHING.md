@@ -99,12 +99,11 @@ Two ways to push it to Docker Hub:
 
 Three reasons to cut a new tag, in order of how common they should be:
 
-1. **Package bump in one of the pinned R packages.** `move` and
-   `move2` updates land on CRAN regularly. `moveVis` was archived from
-   CRAN in late 2024 — we install it from `16EAGLE/moveVis` (GitHub
-   HEAD) instead, and a new commit there is its own reason to rebuild.
-   We follow either source with a fresh image so the pinned matrix
-   advances.
+1. **Package bump.** CRAN packages only move when you change the
+   snapshot date in `ARG CRAN_SNAPSHOT`; `moveVis` (no longer on CRAN,
+   installed from GitHub `16EAGLE/moveVis`) only moves when you change
+   the commit in `ARG MOVEVIS_REF`. Rebuilding without changing either
+   gives the same versions.
 2. **Base image bump.** `rocker/geospatial` releases follow the R
    release cadence (roughly twice a year). When R moves from 4.4.x to
    4.5.x, bump the `FROM` line.
@@ -119,17 +118,31 @@ Reasons that are *not* releases of `movebank-rocker`:
 
 ### 2.2 Update the Dockerfile if needed
 
-For a CRAN-bump-only release, no source changes are needed: `pak`
-re-resolves the latest binaries from P3M at build time. Just tag.
+Every version decision is in the `Dockerfile`'s first lines:
 
-For a base-image bump, edit the first line:
+- **CRAN bump:** set `CRAN_SNAPSHOT` to a newer date
+  (`https://p3m.dev/cran/__linux__/noble/<YYYY-MM-DD>`). Keep the date
+  plausible for the R version in the base image.
+- **moveVis bump:** set `MOVEVIS_REF` to the new commit SHA (full SHA,
+  never a branch name).
+- **Base-image bump:** change the `FROM` line, with the new digest:
 
-```dockerfile
-FROM rocker/geospatial:4.5.0
-```
+  ```bash
+  docker buildx imagetools inspect rocker/geospatial:4.5.0 | grep Digest
+  ```
 
-For a pinned-package addition, extend the `pak::pkg_install(c(...))`
-call.
+  ```dockerfile
+  FROM rocker/geospatial:4.5.0@sha256:<digest>
+  ```
+
+  Each rocker version comes with its own CRAN snapshot; use the one it
+  sets (`docker run --rm rocker/geospatial:<v> R -e 'getOption("repos")'`).
+- **Package addition:** extend the `pak::pkg_install(c(...))` call.
+
+Then build. The build fails with `version mismatch: ...` lines if the
+installed versions differ from `EXPECTED_VERSIONS`. That is expected
+after a bump: copy the new versions into `EXPECTED_VERSIONS`, the
+README's version table and the release notes.
 
 ### 2.3 Build locally first
 
@@ -161,7 +174,17 @@ Run this quick check as the `rstudio` user (which is what RStudio
 Server runs as) before the more expensive regression below:
 
 ```bash
+# 1. no mirror URL: move2 must be untouched (movebank.org)
 docker run --rm --user rstudio -w /home/rstudio movebank-rocker:dev \
+    R --quiet -e '
+        suppressPackageStartupMessages(library(move2))
+        stopifnot(grepl("^https://www.movebank.org/", getOption("move2_movebank_api_url")))
+        cat("OK\n")'
+
+# 2. mirror URL set: option re-pointed, keyring lookup bypassed
+docker run --rm --user rstudio -w /home/rstudio \
+    -e MOVEBANK_MIRROR_API_URL=http://host.docker.internal:8080/movebank \
+    movebank-rocker:dev \
     R --quiet -e '
         suppressPackageStartupMessages(library(move2))
         stopifnot(getOption("move2_movebank_api_url") ==
@@ -173,7 +196,7 @@ docker run --rm --user rstudio -w /home/rstudio movebank-rocker:dev \
         cat("OK\n")'
 ```
 
-`OK` is success. A `stopifnot` failure means `.Rprofile` is being
+`OK` twice is success. A `stopifnot` failure means `.Rprofile` is being
 silently bypassed. The three most common causes:
 
 - The option was set but something — typically `move2`'s `.onLoad`
